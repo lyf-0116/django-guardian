@@ -85,7 +85,7 @@ class TestManagerAssignPerm(TestCase):
 
     def test_user_bulk_assign_perm(self):
         UserObjectPermission = get_user_obj_perms_model(self.obj)
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             assigned = UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, [self.obj])
         self.assertEqual(assigned, [UserObjectPermission.objects.get(user=self.user, permission=self.permission)])
 
@@ -124,6 +124,69 @@ class TestManagerAssignPerm(TestCase):
         with self.assertNumQueries(1):
             assigned = GroupObjectPermission.objects.assign_perm_to_many(self.permission, [self.group], self.obj)
         self.assertEqual(assigned, [GroupObjectPermission.objects.get(group=self.group, permission=self.permission)])
+
+
+class TestManagerBulkAssignPermExistenceCheck(TestCase):
+    """
+    Regression tests ensuring ``bulk_assign_perm`` decides what to insert by
+    looking up existing object-permission rows rather than by running a
+    permission check. ``ObjectPermissionChecker.has_perm`` returns True for
+    every superuser (so no rows were ever written for them) and False for
+    inactive users (so a second bulk assign attempted to insert duplicate
+    rows and crashed on the unique constraint).
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="testuser", email="test@example.com")
+        self.obj = ContentType.objects.create(model="foo", app_label="guardian-tests")
+        self.content_type = ContentType.objects.get_for_model(self.obj)
+        self.permission = Permission.objects.get(content_type=self.content_type, codename="change_contenttype")
+
+    def test_superuser_bulk_assign_writes_rows(self):
+        admin = User.objects.create_user(username="admin", is_superuser=True)
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+
+        assigned = UserObjectPermission.objects.bulk_assign_perm(self.permission, admin, [self.obj])
+
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(UserObjectPermission.objects.filter(user=admin, permission=self.permission).count(), 1)
+
+    def test_inactive_user_bulk_assign_is_idempotent(self):
+        inactive = User.objects.create_user(username="inactive", is_active=False)
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+
+        first = UserObjectPermission.objects.bulk_assign_perm(self.permission, inactive, [self.obj])
+        second = UserObjectPermission.objects.bulk_assign_perm(self.permission, inactive, [self.obj])
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        self.assertEqual(UserObjectPermission.objects.filter(user=inactive, permission=self.permission).count(), 1)
+
+    def test_bulk_assign_skips_objects_with_existing_rows(self):
+        other_obj = ContentType.objects.create(model="bar", app_label="guardian-tests")
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+        UserObjectPermission.objects.assign_perm(self.permission, self.user, self.obj)
+
+        assigned = UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, [self.obj, other_obj])
+
+        self.assertEqual([instance.content_object for instance in assigned], [other_obj])
+        self.assertEqual(
+            UserObjectPermission.objects.filter(
+                user=self.user, permission=self.permission, content_type=self.content_type
+            ).count(),
+            2,
+        )
+
+    def test_bulk_assign_with_queryset_is_idempotent(self):
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+        queryset = ContentType.objects.filter(pk=self.obj.pk)
+
+        first = UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, queryset)
+        second = UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, queryset)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        self.assertEqual(UserObjectPermission.objects.filter(user=self.user, permission=self.permission).count(), 1)
 
 
 class TestAssignPermCustomContentType(TestCase):

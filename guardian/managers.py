@@ -8,7 +8,6 @@ from django.db import models
 from django.db.models import Model, Q, QuerySet
 
 from guardian.conf import settings as guardian_settings
-from guardian.core import ObjectPermissionChecker
 from guardian.ctypes import get_content_type, get_default_content_type
 from guardian.exceptions import ObjectNotPersisted
 
@@ -101,19 +100,38 @@ class BaseObjectPermissionManager(models.Manager):
             ctype = get_content_type(queryset.model)
 
         permission = _ensure_permission(perm, ctype)
-        checker = ObjectPermissionChecker(user_or_group)
-        checker.prefetch_perms(queryset)
+
+        identity_field = self.user_or_group_field
+        existing_filters = Q(permission=permission, **{identity_field: user_or_group})
+        if self.is_generic():
+            existing_filters &= Q(content_type=ctype)
+
+        if isinstance(queryset, list):
+            target_pks = [str(instance.pk) for instance in queryset]
+        else:
+            target_pks = [str(pk) for pk in queryset.values_list("pk", flat=True)]
+
+        if self.is_generic():
+            existing_filters &= Q(object_pk__in=target_pks)
+            existing_pks = set(self.filter(existing_filters).values_list("object_pk", flat=True))
+        else:
+            existing_filters &= Q(content_object__pk__in=target_pks)
+            existing_pks = {
+                str(pk) for pk in self.filter(existing_filters).values_list("content_object__pk", flat=True)
+            }
 
         assigned_perms = []
         for instance in queryset:
-            if not checker.has_perm(permission.codename, instance):
-                kwargs = {"permission": permission, self.user_or_group_field: user_or_group}
-                if self.is_generic():
-                    kwargs["content_type"] = ctype
-                    kwargs["object_pk"] = instance.pk
-                else:
-                    kwargs["content_object"] = instance
-                assigned_perms.append(self.model(**kwargs))
+            if str(instance.pk) in existing_pks:
+                continue
+
+            kwargs = {"permission": permission, identity_field: user_or_group}
+            if self.is_generic():
+                kwargs["content_type"] = ctype
+                kwargs["object_pk"] = instance.pk
+            else:
+                kwargs["content_object"] = instance
+            assigned_perms.append(self.model(**kwargs))
         self.model.objects.bulk_create(assigned_perms, ignore_conflicts=ignore_conflicts)
 
         return assigned_perms

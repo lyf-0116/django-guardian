@@ -68,6 +68,36 @@ class TestDirectUserPermissions(TestCase):
         result = ProjectUserObjectPermission.objects.filter(**filters).count()
         self.assertEqual(result, 0)
 
+    def test_bulk_assign_perm_uses_row_existence(self):
+        other_project = Project.objects.create(name="Other")
+        perm = self.get_perm("add_project")
+
+        first = ProjectUserObjectPermission.objects.bulk_assign_perm(perm, self.joe, [self.project, other_project])
+        second = ProjectUserObjectPermission.objects.bulk_assign_perm(perm, self.joe, [self.project, other_project])
+
+        self.assertEqual(len(first), 2)
+        self.assertEqual(second, [])
+        self.assertEqual(
+            ProjectUserObjectPermission.objects.filter(
+                user=self.joe, permission=perm, content_object__in=[self.project, other_project]
+            ).count(),
+            2,
+        )
+
+    def test_bulk_assign_perm_superuser_writes_rows(self):
+        admin = User.objects.create_user("admin", "admin@example.com", "foobar", is_superuser=True)
+        perm = self.get_perm("add_project")
+
+        assigned = ProjectUserObjectPermission.objects.bulk_assign_perm(perm, admin, [self.project])
+
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(
+            ProjectUserObjectPermission.objects.filter(
+                user=admin, permission=perm, content_object=self.project
+            ).count(),
+            1,
+        )
+
     def test_get_users_with_perms(self):
         User.objects.create_user("john", "john@foobar.com", "john")
         jane = User.objects.create_user("jane", "jane@foobar.com", "jane")
