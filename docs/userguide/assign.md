@@ -170,6 +170,14 @@ groups at once:
 >>> UserObjectPermission.objects.assign_perm_to_many('change_task', users, task)
 ```
 
+Both bulk paths through `assign_perm()` are idempotent: permissions that
+already exist are ignored instead of raising an error. The manager methods
+above default to `ignore_conflicts=False`; pass `ignore_conflicts=True` to get
+the same behavior when calling them directly.
+
+Each bulk assignment is written in a single transaction. If any part of the
+insert fails, no permissions from that call are persisted.
+
 ## Limitations
 
 !!! warning

@@ -210,6 +210,16 @@ class AssignPermTest(ObjectPermissionTestCase):
             self.assertTrue(check.has_perm("change_contenttype", obj))
             self.assertTrue(check.has_perm("delete_contenttype", obj))
 
+    def test_user_assign_perm_list_with_duplicates(self):
+        assign_perm("add_contenttype", self.user, [self.ctype, self.ctype])
+        self.assertTrue(self.user.has_perm("add_contenttype", self.ctype))
+
+    def test_group_assign_perm_list_with_duplicates(self):
+        assign_perm("add_contenttype", self.group, [self.ctype, self.ctype])
+
+        check = ObjectPermissionChecker(self.group)
+        self.assertTrue(check.has_perm("add_contenttype", self.ctype))
+
 
 class MultipleIdentitiesAssignTest(ObjectPermissionTestCase):
     """

@@ -4,7 +4,7 @@ import warnings
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Model, Q, QuerySet
 
 from guardian.conf import settings as guardian_settings
@@ -114,7 +114,10 @@ class BaseObjectPermissionManager(models.Manager):
                 else:
                     kwargs["content_object"] = instance
                 assigned_perms.append(self.model(**kwargs))
-        self.model.objects.bulk_create(assigned_perms, ignore_conflicts=ignore_conflicts)
+        if not assigned_perms:
+            return []
+        with transaction.atomic():
+            self.model.objects.bulk_create(assigned_perms, ignore_conflicts=ignore_conflicts)
 
         return assigned_perms
 
@@ -140,7 +143,10 @@ class BaseObjectPermissionManager(models.Manager):
             kwargs[field] = user
             to_add.append(self.model(**kwargs))
 
-        return self.model.objects.bulk_create(to_add, ignore_conflicts=ignore_conflicts)
+        if not to_add:
+            return []
+        with transaction.atomic():
+            return self.model.objects.bulk_create(to_add, ignore_conflicts=ignore_conflicts)
 
     def assign(self, perm: _PermType, user_or_group: Any, obj: Model) -> Any:
         """Depreciated function name left in for compatibility"""

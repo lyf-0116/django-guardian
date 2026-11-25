@@ -4,6 +4,7 @@ import warnings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.db.models.query import QuerySet
 from django.test import TestCase
 
 from guardian.managers import (
@@ -85,7 +86,7 @@ class TestManagerAssignPerm(TestCase):
 
     def test_user_bulk_assign_perm(self):
         UserObjectPermission = get_user_obj_perms_model(self.obj)
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             assigned = UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, [self.obj])
         self.assertEqual(assigned, [UserObjectPermission.objects.get(user=self.user, permission=self.permission)])
 
@@ -97,7 +98,7 @@ class TestManagerAssignPerm(TestCase):
 
     def test_user_assign_perm_to_many(self):
         UserObjectPermission = get_user_obj_perms_model(self.obj)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(3):
             assigned = UserObjectPermission.objects.assign_perm_to_many(self.permission, [self.user], self.obj)
         self.assertEqual(assigned, [UserObjectPermission.objects.get(user=self.user, permission=self.permission)])
 
@@ -109,7 +110,7 @@ class TestManagerAssignPerm(TestCase):
 
     def test_group_bulk_assign_perm(self):
         GroupObjectPermission = get_group_obj_perms_model(self.obj)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(4):
             assigned = GroupObjectPermission.objects.bulk_assign_perm(self.permission, self.group, [self.obj])
         self.assertEqual(assigned, [GroupObjectPermission.objects.get(group=self.group, permission=self.permission)])
 
@@ -121,9 +122,35 @@ class TestManagerAssignPerm(TestCase):
 
     def test_group_assign_perm_to_many(self):
         GroupObjectPermission = get_group_obj_perms_model(self.obj)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(3):
             assigned = GroupObjectPermission.objects.assign_perm_to_many(self.permission, [self.group], self.obj)
         self.assertEqual(assigned, [GroupObjectPermission.objects.get(group=self.group, permission=self.permission)])
+
+    def test_bulk_assign_perm_rolls_back_on_failure(self):
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+        original_bulk_create = QuerySet.bulk_create
+
+        def failing_bulk_create(queryset, objs, *args, **kwargs):
+            original_bulk_create(queryset, list(objs)[:1], *args, **kwargs)
+            raise RuntimeError("simulated failure after a partial insert")
+
+        with mock.patch.object(QuerySet, "bulk_create", failing_bulk_create), self.assertRaises(RuntimeError):
+            UserObjectPermission.objects.bulk_assign_perm(self.permission, self.user, [self.obj])
+
+        self.assertFalse(UserObjectPermission.objects.exists())
+
+    def test_assign_perm_to_many_rolls_back_on_failure(self):
+        UserObjectPermission = get_user_obj_perms_model(self.obj)
+        original_bulk_create = QuerySet.bulk_create
+
+        def failing_bulk_create(queryset, objs, *args, **kwargs):
+            original_bulk_create(queryset, list(objs)[:1], *args, **kwargs)
+            raise RuntimeError("simulated failure after a partial insert")
+
+        with mock.patch.object(QuerySet, "bulk_create", failing_bulk_create), self.assertRaises(RuntimeError):
+            UserObjectPermission.objects.assign_perm_to_many(self.permission, [self.user], self.obj)
+
+        self.assertFalse(UserObjectPermission.objects.exists())
 
 
 class TestAssignPermCustomContentType(TestCase):

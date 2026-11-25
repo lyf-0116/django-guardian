@@ -131,6 +131,10 @@ def assign_perm(
         <Permission: sites | site | Can change site>
         ```
 
+    Note: Bulk assignment
+        Bulk operations ignore permissions that already exist and perform the
+        insert in a single transaction.
+
     """
     if isinstance(user_or_group, list) and not user_or_group:
         return None
@@ -155,10 +159,10 @@ def assign_perm(
             raise MultipleIdentityAndObjectError("Only bulk operations on either users/groups OR objects supported")
         if user:
             model = get_user_obj_perms_model(obj[0] if isinstance(obj, list) else obj.model)
-            return model.objects.bulk_assign_perm(perm, user, obj)
+            return model.objects.bulk_assign_perm(perm, user, obj, ignore_conflicts=True)
         if group:
             model = get_group_obj_perms_model(obj[0] if isinstance(obj, list) else obj.model)
-            return model.objects.bulk_assign_perm(perm, group, obj)
+            return model.objects.bulk_assign_perm(perm, group, obj, ignore_conflicts=True)
 
     if isinstance(user_or_group, (QuerySet, list)):
         if user:
