@@ -116,7 +116,10 @@ At the `core` module of `django-guardian`, there is a
 `guardian.core.ObjectPermissionChecker`
 which checks permission of user/group for specific object. It caches
 results so it may be used at part of codes where we check permissions
-more than once.
+more than once. Object permission changes made through Guardian
+automatically invalidate existing checker caches, so a checker created
+before a permission was assigned or removed returns the current result
+on its next call.
 
 Let's see it in action:
 
@@ -132,6 +135,11 @@ Let's see it in action:
     >>> checker.get_perms(site)
     [u'change_site']
 ```
+
+If permissions are modified outside Guardian's models, call
+`checker.clear_cache()` to discard the snapshot and reload it on the next
+check. `ObjectPermissionChecker.invalidate_cache()` invalidates every
+checker instance in the current process.
 
 ### Using decorators
 

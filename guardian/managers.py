@@ -53,6 +53,18 @@ def _get_perm_filter(perm: _PermType, model: Model | type[Model] | None = None, 
 
 
 class BaseObjectPermissionManager(models.Manager):
+    def bulk_create(self, objs, *args, **kwargs):
+        created = super().bulk_create(objs, *args, **kwargs)
+        if created:
+            ObjectPermissionChecker.invalidate_cache()
+        return created
+
+    def bulk_update(self, objs, fields, *args, **kwargs):
+        updated = super().bulk_update(objs, fields, *args, **kwargs)
+        if updated:
+            ObjectPermissionChecker.invalidate_cache()
+        return updated
+
     @property
     def user_or_group_field(self) -> str:
         try:

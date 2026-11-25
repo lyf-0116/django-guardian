@@ -16,7 +16,7 @@ from guardian.core import ObjectPermissionChecker
 from guardian.exceptions import NotUserNorGroup
 from guardian.management import create_anonymous_user
 from guardian.models import GroupObjectPermission, UserObjectPermission
-from guardian.shortcuts import assign_perm
+from guardian.shortcuts import assign_perm, remove_perm
 from guardian.testapp.models import (
     MixedGroupObjectPermission,
     Project,
@@ -182,6 +182,76 @@ class ObjectPermissionCheckerTest(ObjectPermissionTestCase):
             for perm in perms:
                 GroupObjectPermission.objects.assign_perm(perm, self.group, obj)
             self.assertEqual(sorted(perms), sorted(check.get_perms(obj)))
+
+    def test_cache_invalidated_after_assign_perm(self):
+        checker = ObjectPermissionChecker(self.user)
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+        assign_perm("change_contenttype", self.user, self.ctype)
+
+        self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+    def test_cache_invalidated_after_remove_perm(self):
+        assign_perm("change_contenttype", self.user, self.ctype)
+        checker = ObjectPermissionChecker(self.user)
+        self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+        remove_perm("change_contenttype", self.user, self.ctype)
+
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+    def test_cache_invalidated_after_bulk_assign_perm(self):
+        checker = ObjectPermissionChecker(self.user)
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+        UserObjectPermission.objects.bulk_assign_perm("change_contenttype", self.user, [self.ctype])
+
+        self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+    def test_group_checker_cache_invalidated_after_remove_perm(self):
+        assign_perm("change_contenttype", self.group, self.ctype)
+        checker = ObjectPermissionChecker(self.group)
+        self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+        remove_perm("change_contenttype", self.group, self.ctype)
+
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+    def test_cache_invalidated_after_group_membership_change(self):
+        group = Group.objects.create(name="cache-invalidation-group")
+        user = User.objects.create(username="cache-invalidation-user")
+        assign_perm("change_contenttype", group, self.ctype)
+        checker = ObjectPermissionChecker(user)
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+        user.groups.add(group)
+        self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+        user.groups.remove(group)
+        self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+
+    def test_direct_model_cache_invalidated_after_remove_perm(self):
+        project = Project.objects.create(name="cache-invalidation")
+        assign_perm("change_project", self.user, project)
+        checker = ObjectPermissionChecker(self.user)
+        self.assertTrue(checker.has_perm("change_project", project))
+
+        remove_perm("change_project", self.user, project)
+
+        self.assertFalse(checker.has_perm("change_project", project))
+
+    def test_autoprefetch_cache_invalidated_after_remove_perm(self):
+        guardian_settings.AUTO_PREFETCH = True
+        try:
+            assign_perm("change_contenttype", self.user, self.ctype)
+            checker = ObjectPermissionChecker(self.user)
+            self.assertTrue(checker.has_perm("change_contenttype", self.ctype))
+
+            remove_perm("change_contenttype", self.user, self.ctype)
+
+            self.assertFalse(checker.has_perm("change_contenttype", self.ctype))
+        finally:
+            guardian_settings.AUTO_PREFETCH = False
 
     def test_prefetch_user_perms(self):
         settings.DEBUG = True

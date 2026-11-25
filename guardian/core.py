@@ -8,7 +8,7 @@ from django.utils.encoding import force_str
 
 from guardian.conf import settings as guardian_settings
 from guardian.ctypes import get_content_type
-from guardian.utils import get_group_obj_perms_model, get_identity, get_user_obj_perms_model
+from guardian.utils import evict_obj_perms_cache, get_group_obj_perms_model, get_identity, get_user_obj_perms_model
 
 
 def _get_pks_model_and_ctype(objects):
@@ -39,19 +39,20 @@ def _get_pks_model_and_ctype(objects):
 class ObjectPermissionChecker:
     """Generic object permissions checker class being the heart of `django-guardian`.
 
-    Note:
-       Once checked for a single object, permissions are stored, and we don't hit
-       the database again if another check is called for this object. This is great
-       for templates, views or other request-based checks (assuming we don't
-       have hundreds of permissions on a single object as we fetch all
-       permissions for checked object).
+    Once checked for a single object, permissions are stored, and we don't hit
+    the database again if another check is called for this object. This is great
+    for templates, views or other request-based checks (assuming we don't
+    have hundreds of permissions on a single object as we fetch all
+    permissions for checked object).
 
-       if we call `has_perm` for perm1/object1, then we
-       change permission state and call `has_perm` again for same
-       perm1/object1 on the same instance of ObjectPermissionChecker we won't see a
-       difference as permissions are already fetched and stored within the cache
-       dictionary.
+    Object permission changes invalidate cached results automatically. This
+    includes changes made through the shortcuts, managers, direct model saves,
+    queryset deletes, and bulk creates. If permissions are changed outside of
+    Guardian's models, call `clear_cache()` on the checker before checking
+    again.
     """
+
+    _cache_generation = 0
 
     def __init__(self, user_or_group: Model | None = None) -> None:
         """Constructor for ObjectPermissionChecker.
@@ -61,6 +62,22 @@ class ObjectPermissionChecker:
         """
         self.user, self.group = get_identity(user_or_group)  # type: ignore[arg-type] # None is not allowed
         self._obj_perms_cache: dict = {}
+        self._obj_perms_cache_generation = type(self)._cache_generation
+
+    @classmethod
+    def invalidate_cache(cls) -> None:
+        """Invalidate cached permission results for every checker instance."""
+        cls._cache_generation += 1
+
+    def _ensure_cache_current(self) -> None:
+        if self._obj_perms_cache_generation != type(self)._cache_generation:
+            self.clear_cache()
+
+    def clear_cache(self) -> None:
+        """Discard this checker's cached permissions and reload them on demand."""
+        self._obj_perms_cache = {}
+        self._obj_perms_cache_generation = type(self)._cache_generation
+        evict_obj_perms_cache(self.user or self.group)
 
     def has_perm(self, perm: str, obj: Model) -> bool:
         """Checks if user/group has the specified permission for the given object.
@@ -160,6 +177,8 @@ class ObjectPermissionChecker:
         if self.user and not self.user.is_active:
             return []
 
+        self._ensure_cache_current()
+
         # Superusers have every permission, so the prefetch cache (which only
         # holds explicitly assigned permissions) is not used for them.
         if guardian_settings.AUTO_PREFETCH and not (self.user and self.user.is_superuser):
@@ -199,6 +218,8 @@ class ObjectPermissionChecker:
         """
         if self.user and not self.user.is_active:
             return []
+
+        self._ensure_cache_current()
 
         pks, model, ctype = _get_pks_model_and_ctype(objects)
 
@@ -289,13 +310,19 @@ class ObjectPermissionChecker:
         return obj, cache
 
     def _prefetch_cache(self):
+        self._ensure_cache_current()
+
         obj = self.user if self.user else self.group
 
         # Cache hits should stay O(1): bail out before scanning the app
         # registry for direct permission models and building their querysets.
         if hasattr(obj, "_guardian_perms_cache"):
-            self._obj_perms_cache = obj._guardian_perms_cache
-            return
+            cache_generation = getattr(obj, "_guardian_perms_cache_generation", None)
+            if cache_generation == type(self)._cache_generation:
+                self._obj_perms_cache = obj._guardian_perms_cache
+                self._obj_perms_cache_generation = cache_generation
+                return
+            evict_obj_perms_cache(obj)
 
         from guardian.models import GroupObjectPermissionBase, UserObjectPermissionBase
         from guardian.utils import get_direct_obj_perms_models, get_group_obj_perms_model, get_user_obj_perms_model
@@ -318,4 +345,6 @@ class ObjectPermissionChecker:
             ]
 
         obj, cache = self._init_obj_prefetch_cache(obj, *querysets)
+        obj._guardian_perms_cache_generation = type(self)._cache_generation
         self._obj_perms_cache = cache
+        self._obj_perms_cache_generation = type(self)._cache_generation
